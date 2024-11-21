@@ -26,6 +26,7 @@ func main() {
 	env := flag.String("env", "", "Environment: dev/prod")
 	rpcURL := flag.String("rpc-url", "", "RPC URL to get block number")
 	hostname := flag.String("hostname", "", "Hostname of the server")
+	officialURL := flag.String("official-url", "", "Official URL of the quai")
 
 	flag.Parse()
 
@@ -74,6 +75,18 @@ func main() {
 			log.Printf("RPC query successful, current block height: %d", rpcHeight)
 			blockHeightGauge.Set(float64(rpcHeight))
 			pushMetrics(*pushURL, *jobName, *env, "rpc", *hostname, blockHeightGauge)
+		}
+
+		log.Println("Querying the official for the current block height...")
+		officialHeight, err := fetchBlockHeightFromRPC(*officialURL)
+		if err != nil {
+			log.Printf("Failed to fetch block height from official: %v", err)
+			blockHeightGauge.Set(-1) // 查询失败时，设置为特殊值
+			pushMetrics(*pushURL, *jobName, *env, "official", "", blockHeightGauge)
+		} else {
+			log.Printf("official query successful, current block height: %d", officialHeight)
+			blockHeightGauge.Set(float64(officialHeight))
+			pushMetrics(*pushURL, *jobName, *env, "official", "", blockHeightGauge)
 		}
 
 		log.Printf("Sleeping for %s before the next query", *interval)
