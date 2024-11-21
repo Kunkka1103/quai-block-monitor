@@ -25,6 +25,7 @@ func main() {
 	jobName := flag.String("job", "", "job name for Pushgateway")
 	env := flag.String("env", "", "Environment: dev/prod")
 	rpcURL := flag.String("rpc-url", "", "RPC URL to get block number")
+	hostname := flag.String("hostname", "", "Hostname of the server")
 
 	flag.Parse()
 
@@ -56,11 +57,11 @@ func main() {
 		if err != nil {
 			log.Printf("Failed to execute query: %v", err)
 			blockHeightGauge.Set(-1) // 查询失败时，设置为特殊值
-			pushMetrics(*pushURL, *jobName, *env, "db", blockHeightGauge)
+			pushMetrics(*pushURL, *jobName, *env, "db", "", blockHeightGauge)
 		} else {
 			log.Printf("Query successful, maximum block height: %d", maxHeight)
 			blockHeightGauge.Set(float64(maxHeight))
-			pushMetrics(*pushURL, *jobName, *env, "db", blockHeightGauge)
+			pushMetrics(*pushURL, *jobName, *env, "db", "", blockHeightGauge)
 		}
 
 		log.Println("Querying the RPC for the current block height...")
@@ -68,11 +69,11 @@ func main() {
 		if err != nil {
 			log.Printf("Failed to fetch block height from RPC: %v", err)
 			blockHeightGauge.Set(-1) // 查询失败时，设置为特殊值
-			pushMetrics(*pushURL, *jobName, *env, "rpc", blockHeightGauge)
+			pushMetrics(*pushURL, *jobName, *env, "rpc", *hostname, blockHeightGauge)
 		} else {
 			log.Printf("RPC query successful, current block height: %d", rpcHeight)
 			blockHeightGauge.Set(float64(rpcHeight))
-			pushMetrics(*pushURL, *jobName, *env, "rpc", blockHeightGauge)
+			pushMetrics(*pushURL, *jobName, *env, "rpc", *hostname, blockHeightGauge)
 		}
 
 		log.Printf("Sleeping for %s before the next query", *interval)
@@ -126,13 +127,22 @@ func fetchBlockHeightFromRPC(rpcURL string) (int64, error) {
 }
 
 // pushMetrics 使用 Pushgateway 推送数据
-func pushMetrics(pushURL, jobName, env, source string, gauge prometheus.Gauge) {
-	log.Printf("Pushing metrics to Pushgateway at %s with job name %s and source %s...", pushURL, jobName, source)
-	if err := push.New(pushURL, jobName).
+func pushMetrics(pushURL, jobName, env, source, hostname string, gauge prometheus.Gauge) {
+	log.Printf("Pushing metrics to Pushgateway at %s with job name %s, source %s...", pushURL, jobName, source)
+
+	// 创建 Pushgateway pusher 对象
+	pusher := push.New(pushURL, jobName).
 		Grouping("env", env).
 		Grouping("source", source).
-		Collector(gauge).
-		Push(); err != nil {
+		Collector(gauge)
+
+	// 如果提供了 hostname，则添加 hostname 标签
+	if hostname != "" {
+		pusher.Grouping("hostname", hostname)
+	}
+
+	// 推送数据
+	if err := pusher.Push(); err != nil {
 		log.Printf("Could not push to Pushgateway: %v", err)
 	} else {
 		log.Println("Pushed metrics successfully")
