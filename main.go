@@ -53,7 +53,7 @@ func main() {
 	for {
 		log.Println("Querying the database for the maximum block height...")
 		var maxHeight int
-		err := db.QueryRow("SELECT MAX(number) FROM block").Scan(&maxHeight)
+		err := db.QueryRow("SELECT MAX(number) FROM blocks").Scan(&maxHeight)
 		if err != nil {
 			log.Printf("Failed to execute query: %v", err)
 			blockHeightGauge.Set(-1) // 查询失败时，设置为特殊值
