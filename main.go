@@ -78,11 +78,11 @@ func main() {
 
 	// dev 环境参数
 	devDsn := flag.String("dev-dsn", "", "PostgreSQL DSN for dev environment")
-	devRpcUrls := flag.String("dev-rpc-urls", "", "Comma-separated list of RPC URLs for dev environment, with hostname (url:hostname)")
+	devRpcUrls := flag.String("dev-rpc-urls", "", "Comma-separated list of RPC URLs for dev environment, with hostname (url;hostname)")
 
 	// prod 环境参数
 	prodDsn := flag.String("prod-dsn", "", "PostgreSQL DSN for prod environment")
-	prodRpcUrls := flag.String("prod-rpc-urls", "", "Comma-separated list of RPC URLs for prod environment, with hostname (url:hostname)")
+	prodRpcUrls := flag.String("prod-rpc-urls", "", "Comma-separated list of RPC URLs for prod environment, with hostname (url;hostname)")
 
 	// 官方 URL
 	officialURL := flag.String("official-url", "", "Official URL of the block height")
@@ -146,7 +146,7 @@ func main() {
 
 			// 查询每个 RPC 节点的高度
 			for _, rpcEntry := range devNodeURLs {
-				splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ":")
+				splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ";")
 				if len(splitEntry) != 2 {
 					log.Printf("[dev] Invalid RPC entry format: %s", rpcEntry)
 					continue
@@ -192,7 +192,7 @@ func main() {
 
 			// 查询每个 RPC 节点的高度
 			for _, rpcEntry := range prodNodeURLs {
-				splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ":")
+				splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ";")
 				if len(splitEntry) != 2 {
 					log.Printf("[prod] Invalid RPC entry format: %s", rpcEntry)
 					continue
