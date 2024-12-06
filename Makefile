@@ -1,16 +1,17 @@
-# 定义二进制文件名称
-BINARY_NAME=quai-block-monitor
+# 查找 go 命令的路径
+GO := $(shell which go)
+BINARY_NAME = quai-block-monitor
+SRC = main.go
 
-# 默认目标：构建二进制文件
+# 默认目标
 all: build
 
 # 构建二进制文件
 build:
-	go build -o $(BINARY_NAME) main.go
+	$(GO) build -o $(BINARY_NAME) $(SRC)
 
-# 清理生成的二进制文件
+# 清理生成的文件
 clean:
 	rm -f $(BINARY_NAME)
 
-# 伪目标（不生成实际文件）
-.PHONY: all build clean run
+.PHONY: all build clean.root
