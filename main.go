@@ -229,7 +229,7 @@ func main() {
 			Help: "The block height of quai from different sources",
 		})
 		blockHeightGauge.Set(float64(officialHeight))
-		pushMetrics(*pushURL, *jobName, "official", *officialURL, "",blockHeightGauge)
+		pushMetrics(*pushURL, *jobName, "prod", *officialURL, "official",blockHeightGauge)
 
 		log.Printf("Sleeping for %s before the next query", *interval)
 		time.Sleep(*interval)
