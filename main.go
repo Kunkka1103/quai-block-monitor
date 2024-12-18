@@ -25,11 +25,11 @@ var httpClient = &http.Client{}
 // fetchBlockHeightFromRPC 从 RPC 获取块高度，使用 context 设置超时
 func fetchBlockHeightFromRPC(rpcURL string, timeout time.Duration) (int64, error) {
 	payload := `{
-		"jsonrpc": "2.0",
-		"method": "quai_blockNumber",
-		"params": [],
-		"id": 1
-	}`
+        "jsonrpc": "2.0",
+        "method": "quai_blockNumber",
+        "params": [],
+        "id": 1
+    }`
 
 	// 创建带超时的 context
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -115,11 +115,6 @@ func processRPCNodes(env string, rpcEntries []string, pushURL, jobName, envLabel
 			blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 				Name: "quai_block_height",
 				Help: "The block height of quai from different sources",
-				ConstLabels: prometheus.Labels{
-					"env":      env,
-					"source":   "rpc",
-					"hostname": hostname,
-				},
 			})
 			blockHeightGauge.Set(float64(rpcHeight))
 			pushMetrics(pushURL, jobName, envLabel, "rpc", hostname, blockHeightGauge)
@@ -202,10 +197,6 @@ func main() {
 			blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 				Name: "quai_block_height",
 				Help: "The block height of quai from different sources",
-				ConstLabels: prometheus.Labels{
-					"env":    "dev",
-					"source": "db",
-				},
 			})
 			blockHeightGauge.Set(float64(maxHeight))
 			pushMetrics(*pushURL, *jobName, "dev", "db", "", blockHeightGauge)
@@ -232,10 +223,6 @@ func main() {
 			blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 				Name: "quai_block_height",
 				Help: "The block height of quai from different sources",
-				ConstLabels: prometheus.Labels{
-					"env":    "prod",
-					"source": "db",
-				},
 			})
 			blockHeightGauge.Set(float64(maxHeight))
 			pushMetrics(*pushURL, *jobName, "prod", "db", "", blockHeightGauge)
@@ -254,17 +241,12 @@ func main() {
 		}
 
 		// 推送官方 URL 的高度
-		blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
+		officialGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "quai_block_height",
 			Help: "The block height of quai from different sources",
-			ConstLabels: prometheus.Labels{
-				"env":      "prod",
-				"source":   "official",
-				"hostname": "official",
-			},
 		})
-		blockHeightGauge.Set(float64(officialHeight))
-		pushMetrics(*pushURL, *jobName, "prod", "official", "official", blockHeightGauge)
+		officialGauge.Set(float64(officialHeight))
+		pushMetrics(*pushURL, *jobName, "prod", "official", "official", officialGauge)
 
 		log.Printf("Sleeping for %s before the next query", *interval)
 		time.Sleep(*interval)
