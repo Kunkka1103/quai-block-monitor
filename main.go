@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -17,35 +19,46 @@ import (
 	"github.com/prometheus/client_golang/prometheus/push"
 )
 
-// fetchBlockHeightFromRPC 从 RPC 获取块高度
-func fetchBlockHeightFromRPC(rpcURL string) (int64, error) {
+// 全局 HTTP 客户端，不设置超时，超时通过 context 控制
+var httpClient = &http.Client{}
+
+// fetchBlockHeightFromRPC 从 RPC 获取块高度，使用 context 设置超时
+func fetchBlockHeightFromRPC(rpcURL string, timeout time.Duration) (int64, error) {
 	payload := `{
 		"jsonrpc": "2.0",
 		"method": "quai_blockNumber",
 		"params": [],
 		"id": 1
 	}`
-	req, err := http.NewRequest("POST", rpcURL, strings.NewReader(payload))
+
+	// 创建带超时的 context
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", rpcURL, strings.NewReader(payload))
 	if err != nil {
 		return 0, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{}
-	resp, err := client.Do(req)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer resp.Body.Close()
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read response body: %w", err)
 	}
+
 	var rpcResponse struct {
 		Result string `json:"result"`
 	}
 	if err := json.Unmarshal(body, &rpcResponse); err != nil {
 		return 0, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
+
 	height, err := strconv.ParseInt(rpcResponse.Result, 0, 64)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse block height: %w", err)
@@ -57,17 +70,63 @@ func fetchBlockHeightFromRPC(rpcURL string) (int64, error) {
 func pushMetrics(pushURL, jobName, env, source, hostname string, gauge prometheus.Gauge) {
 	log.Printf("Pushing metrics to Pushgateway at %s with job name %s, source %s...", pushURL, jobName, source)
 	pusher := push.New(pushURL, jobName).
-		Grouping("source", source).
 		Grouping("env", env).
-		Collector(gauge)
+		Grouping("source", source)
 	if hostname != "" {
-		pusher.Grouping("hostname", hostname)
+		pusher = pusher.Grouping("hostname", hostname)
 	}
+	pusher.Collector(gauge)
 	if err := pusher.Push(); err != nil {
 		log.Printf("Could not push to Pushgateway: %v", err)
 	} else {
 		log.Println("Pushed metrics successfully")
 	}
+}
+
+// processRPCNodes 并发处理 RPC 节点
+func processRPCNodes(env string, rpcEntries []string, pushURL, jobName, envLabel string, rpcTimeout time.Duration) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10) // 控制并发数，例如最多10个并发请求
+
+	for _, rpcEntry := range rpcEntries {
+		wg.Add(1)
+		go func(rpcEntry string) {
+			defer wg.Done()
+			sem <- struct{}{} // 获取一个并发槽
+			defer func() { <-sem }() // 释放并发槽
+
+			splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ";")
+			if len(splitEntry) != 2 {
+				log.Printf("[%s] Invalid RPC entry format: %s", env, rpcEntry)
+				return
+			}
+			rpcURL := splitEntry[0]
+			hostname := splitEntry[1]
+
+			rpcHeight, err := fetchBlockHeightFromRPC(rpcURL, rpcTimeout)
+			if err != nil {
+				log.Printf("[%s] Failed to query RPC (%s): %v", env, rpcURL, err)
+				rpcHeight = -1
+			} else {
+				log.Printf("[%s] Block height from RPC (%s): %d", env, rpcURL, rpcHeight)
+			}
+
+			// 推送 RPC 节点的高度
+			blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
+				Name: "quai_block_height",
+				Help: "The block height of quai from different sources",
+				ConstLabels: prometheus.Labels{
+					"env":      env,
+					"source":   "rpc",
+					"hostname": hostname,
+				},
+			})
+			blockHeightGauge.Set(float64(rpcHeight))
+			pushMetrics(pushURL, jobName, envLabel, "rpc", hostname, blockHeightGauge)
+		}(rpcEntry)
+	}
+
+	wg.Wait()
 }
 
 func main() {
@@ -121,6 +180,9 @@ func main() {
 		defer prodDb.Close()
 	}
 
+	// 定义一个全局的 RPC 请求超时时间，例如 10 秒
+	const rpcTimeout = 10 * time.Second
+
 	for {
 		// 处理 dev 环境
 		if devDb != nil {
@@ -140,32 +202,16 @@ func main() {
 			blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 				Name: "quai_block_height",
 				Help: "The block height of quai from different sources",
+				ConstLabels: prometheus.Labels{
+					"env":    "dev",
+					"source": "db",
+				},
 			})
 			blockHeightGauge.Set(float64(maxHeight))
 			pushMetrics(*pushURL, *jobName, "dev", "db", "", blockHeightGauge)
 
-			// 查询每个 RPC 节点的高度
-			for _, rpcEntry := range devNodeURLs {
-				splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ";")
-				if len(splitEntry) != 2 {
-					log.Printf("[dev] Invalid RPC entry format: %s", rpcEntry)
-					continue
-				}
-				rpcURL := splitEntry[0]
-				hostname := splitEntry[1]
-
-				rpcHeight, err := fetchBlockHeightFromRPC(rpcURL)
-				if err != nil {
-					log.Printf("[dev] Failed to query RPC (%s): %v", rpcURL, err)
-					rpcHeight = -1
-				} else {
-					log.Printf("[dev] Block height from RPC (%s): %d", rpcURL, rpcHeight)
-				}
-
-				// 推送 RPC 节点的高度
-				blockHeightGauge.Set(float64(rpcHeight))
-				pushMetrics(*pushURL, *jobName, "dev", "rpc", hostname, blockHeightGauge)
-			}
+			// 并发查询每个 RPC 节点的高度
+			processRPCNodes("dev", devNodeURLs, *pushURL, *jobName, "dev", rpcTimeout)
 		}
 
 		// 处理 prod 环境
@@ -186,36 +232,20 @@ func main() {
 			blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 				Name: "quai_block_height",
 				Help: "The block height of quai from different sources",
+				ConstLabels: prometheus.Labels{
+					"env":    "prod",
+					"source": "db",
+				},
 			})
 			blockHeightGauge.Set(float64(maxHeight))
 			pushMetrics(*pushURL, *jobName, "prod", "db", "", blockHeightGauge)
 
-			// 查询每个 RPC 节点的高度
-			for _, rpcEntry := range prodNodeURLs {
-				splitEntry := strings.Split(strings.TrimSpace(rpcEntry), ";")
-				if len(splitEntry) != 2 {
-					log.Printf("[prod] Invalid RPC entry format: %s", rpcEntry)
-					continue
-				}
-				rpcURL := splitEntry[0]
-				hostname := splitEntry[1]
-
-				rpcHeight, err := fetchBlockHeightFromRPC(rpcURL)
-				if err != nil {
-					log.Printf("[prod] Failed to query RPC (%s): %v", rpcURL, err)
-					rpcHeight = -1
-				} else {
-					log.Printf("[prod] Block height from RPC (%s): %d", rpcURL, rpcHeight)
-				}
-
-				// 推送 RPC 节点的高度
-				blockHeightGauge.Set(float64(rpcHeight))
-				pushMetrics(*pushURL, *jobName, "prod", "rpc", hostname, blockHeightGauge)
-			}
+			// 并发查询每个 RPC 节点的高度
+			processRPCNodes("prod", prodNodeURLs, *pushURL, *jobName, "prod", rpcTimeout)
 		}
 
 		// 查询官方 URL 的块高度
-		officialHeight, err := fetchBlockHeightFromRPC(*officialURL)
+		officialHeight, err := fetchBlockHeightFromRPC(*officialURL, rpcTimeout)
 		if err != nil {
 			log.Printf("Failed to query official URL: %v", err)
 			officialHeight = -1
@@ -227,9 +257,14 @@ func main() {
 		blockHeightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "quai_block_height",
 			Help: "The block height of quai from different sources",
+			ConstLabels: prometheus.Labels{
+				"env":      "prod",
+				"source":   "official",
+				"hostname": "official",
+			},
 		})
 		blockHeightGauge.Set(float64(officialHeight))
-		pushMetrics(*pushURL, *jobName, "prod", *officialURL, "official",blockHeightGauge)
+		pushMetrics(*pushURL, *jobName, "prod", "official", "official", blockHeightGauge)
 
 		log.Printf("Sleeping for %s before the next query", *interval)
 		time.Sleep(*interval)
